@@ -99,8 +99,27 @@ func someUsefulThings() {
 // This is the type definition for the User struct.
 // A Go struct is like a Python or Java class - it can have attributes
 // (e.g. like the Username attribute) and methods (e.g. like the StoreFile method below).
+const SaltLength = 16
+const HMACLength = 64 // it uses sha512 as the underlying hash function
+
 type User struct {
-	Username string
+    username string
+    password string
+
+    // the salt for HashedPassword
+    PasswordSalt []byte
+    // hash(PasswordSalt || password)
+    HashedPassword []byte
+
+    ArgonSalt []byte
+    rootKey []byte // = f(ArgonSalt, password)
+
+    // Initialize PrviateKey so that other users can send messages to this user
+    privateKey userlib.PKEDecKey
+    Encrypted_privateKey []byte
+    // Initialize SignKey so that this user can gaurantee integrity of its message
+    signKey userlib.DSSignKey
+    Encrypted_signKey []byte
 
 	// You can add other attributes here if you want! But note that in order for attributes to
 	// be included when this struct is serialized to/from JSON, they must be capitalized.
@@ -110,22 +129,233 @@ type User struct {
 	// begins with a lowercase letter).
 }
 
+// type FileMetadata struct {
+//     FileContentHead uuid.UUID
+//     FileContentTail uuid.UUID
+//     FileKey []byte
+//     // each we revoke a user we should change the file location by adding this number into
+//     // the hash function
+//     NumRevoked int
+//     // record our direct shared users (a.k.a children in the shared tree)
+//     SharedUsers []string 
+// }
+
+
+// type FileContentNode struct {
+//     NextFileContentUUID uuid.UUID
+//     Content []byte
+// }
+
+func GetUserUUID(username string) (uuid.UUID){
+    hashed := userlib.Hash([]byte(username))[:16]
+    useruuid, err := uuid.FromBytes(hashed)
+    if err != nil {
+        // should not panic
+        panic(err)
+    }
+    return useruuid
+}
+
+// Ex. "Alice://myfile#0#"
+// func getFileUUID(username string, filename string, counter int, numRevoked int) (uuid.UUID, error){
+//     s := fmt.Sprintf("%s://%s#%d", username, filename, counter)
+//     hashed := userlib.Hash([]byte(s))[:16]
+//     fuuid, err := uuid.FromBytes(hashed)
+//     return fuuid, err
+// }
+
+// UUID/PKE
+func GetPublicKeyKey(username string) string{
+    return GetUserUUID(username).String() + "/PKE"
+}
+
+// UUID/DS
+func GetVerifyKeyKey(username string) string{
+    return GetUserUUID(username).String() + "/DS"
+}
+
+func GetHMACKey(rootKey []byte) []byte{
+    hmacKey, err := userlib.HashKDF(rootKey, []byte("hmac"))
+    if err != nil {
+        panic(err)
+    }
+    // 512 bits = 64 bytes
+    // but for symmetric key we only need 16 bytes
+    return hmacKey[:16]
+}
+
+func GetEncryptKey(rootKey []byte) []byte{
+    encryptKey, err := userlib.HashKDF(rootKey, []byte("encrypt"))
+    if err != nil {
+        panic(err)
+    }
+    // 512 bits = 64 bytes
+    // but for symmetric key we only need 16 bytes
+    return encryptKey[:16]
+}
+
+func (user *User) GetHMAC() []byte{
+    hmacKey := GetHMACKey(user.rootKey)
+    
+    var serialized []byte
+    serialized, err := json.Marshal(user)
+    if err != nil {
+        panic(err)
+    }
+
+    hmac, err := userlib.HMACEval(hmacKey, serialized)
+    if err != nil{
+        panic(err)
+    }
+    return hmac
+}
+
 // NOTE: The following methods have toy (insecure!) implementations.
 
 func InitUser(username string, password string) (userdataptr *User, err error) {
 	var userdata User
-	userdata.Username = username
+
+    var useruuid uuid.UUID
+    useruuid = GetUserUUID(username)
+    // check if there is any existing username in the datastore
+    _, ok := userlib.DatastoreGet(useruuid)
+    if ok{
+        return nil, errors.New("This user already exists or an attacker already created this entry")
+    }
+
+    // No need to export these values
+    userdata.username = username
+    userdata.password = password
+
+    userdata.ArgonSalt = userlib.RandomBytes(SaltLength)
+    userdata.rootKey = userlib.Argon2Key([]byte(password), userdata.ArgonSalt, 16)
+
+    // For password verification
+    userdata.PasswordSalt = userlib.RandomBytes(SaltLength)
+    userdata.HashedPassword = userlib.Argon2Key(
+        []byte(password), userdata.PasswordSalt, 64)
+
+    // ======= PKE ========
+    publicKey, privateKey, err := userlib.PKEKeyGen()
+
+    if err != nil {
+        panic(err)
+    }
+
+    userdata.privateKey = privateKey
+    var privateKey_bytes []byte
+    privateKey_bytes, err = json.Marshal(privateKey)
+
+    if err != nil {
+        panic(err)
+    }
+
+    // Encrypt the private key
+    iv := userlib.RandomBytes(userlib.AESBlockSizeBytes)
+    userdata.Encrypted_privateKey = userlib.SymEnc(GetEncryptKey(userdata.rootKey), iv, privateKey_bytes)
+
+    // Store this user's public key on the Keystore
+    if err := userlib.KeystoreSet(GetPublicKeyKey(username), publicKey); err != nil{
+        panic(err)
+    }
+    // ====================
+
+    // ======= DS  ========
+    signKey, verifyKey, err := userlib.DSKeyGen()
+
+    if err != nil {
+        panic(err)
+    }
+
+    userdata.signKey = signKey
+    var signKey_bytes []byte
+    signKey_bytes, err = json.Marshal(signKey)
+
+    if err != nil {
+        panic(err)
+    }
+
+    iv = userlib.RandomBytes(userlib.AESBlockSizeBytes)
+    userdata.Encrypted_signKey = userlib.SymEnc(GetEncryptKey(userdata.rootKey), iv, signKey_bytes)
+
+    if err := userlib.KeystoreSet(GetVerifyKeyKey(username), verifyKey); err != nil{
+        panic(err)
+    }
+    // ====================
+
+    // Generate HMAC tag
+
+    hmac := userdata.GetHMAC()
+
+    var serialized []byte
+    serialized, err = json.Marshal(userdata)
+    
+    var data_and_hmac []byte
+    data_and_hmac = append(serialized, hmac...)
+
+    // store it in the datastore
+    userlib.DatastoreSet(useruuid, data_and_hmac)
+
 	return &userdata, nil
 }
 
 func GetUser(username string, password string) (userdataptr *User, err error) {
 	var userdata User
-	userdataptr = &userdata
-	return userdataptr, nil
+
+    userdata.username = username
+    userdata.password = password
+
+    var useruuid uuid.UUID
+    useruuid = GetUserUUID(username)
+
+    var data_and_hmac []byte
+    data_and_hmac, ok := userlib.DatastoreGet(useruuid)
+    if !ok {
+        return nil, errors.New("This user does not exist")
+    }
+
+    if len(data_and_hmac) < HMACLength {
+        return nil, errors.New("The data_and_hmac should be at least 64 bytes (for HMAC tag)")
+    }
+
+    var serialized, hmac []byte
+    serialized, hmac = data_and_hmac[:len(data_and_hmac)-HMACLength], data_and_hmac[len(data_and_hmac)-HMACLength:]
+
+    err = json.Unmarshal(serialized, &userdata)
+    if err != nil {
+        return nil, errors.New("The serialized json part is tampered!!!!")
+    }
+
+    // Check the integrity of this user struct
+    // NOTE: we directly use the ArgonSalt because if the attacker tampered with it
+    //       the hmac will directly fail
+    var rootKey []byte
+    rootKey = userlib.Argon2Key([]byte(password), userdata.ArgonSalt, 16)
+
+    regen_hmac, err := userlib.HMACEval(GetHMACKey(rootKey), serialized)
+    if err != nil {
+        panic(err)
+    }
+
+    if !userlib.HMACEqual(regen_hmac, hmac) {
+        return nil, errors.New("This data is already tampered or the password provided a wrong password")
+    }
+
+    // Check the correctness of the password
+    regen_hashed_password := userlib.Argon2Key([]byte(password), userdata.PasswordSalt, 64)
+    for i := 0; i < 64; i++ {
+        if regen_hashed_password[i] != userdata.HashedPassword[i]{
+            return nil, errors.New("You provided the wrong password")
+        }
+    }
+
+
+
+	return &userdata, nil
 }
 
 func (userdata *User) StoreFile(filename string, content []byte) (err error) {
-	storageKey, err := uuid.FromBytes(userlib.Hash([]byte(filename + userdata.Username))[:16])
+	storageKey, err := uuid.FromBytes(userlib.Hash([]byte(filename + userdata.username))[:16])
 	if err != nil {
 		return err
 	}
@@ -142,7 +372,7 @@ func (userdata *User) AppendToFile(filename string, content []byte) error {
 }
 
 func (userdata *User) LoadFile(filename string) (content []byte, err error) {
-	storageKey, err := uuid.FromBytes(userlib.Hash([]byte(filename + userdata.Username))[:16])
+	storageKey, err := uuid.FromBytes(userlib.Hash([]byte(filename + userdata.username))[:16])
 	if err != nil {
 		return nil, err
 	}

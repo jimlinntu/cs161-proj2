@@ -219,7 +219,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
     useruuid = GetUserUUID(username)
     // check if there is any existing username in the datastore
     _, ok := userlib.DatastoreGet(useruuid)
-    if ok{
+    if ok {
         return nil, errors.New("This user already exists or an attacker already created this entry")
     }
 
@@ -289,6 +289,10 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 
     var serialized []byte
     serialized, err = json.Marshal(userdata)
+
+    if err != nil {
+        panic(err)
+    }
     
     var data_and_hmac []byte
     data_and_hmac = append(serialized, hmac...)
@@ -319,11 +323,16 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
     }
 
     var serialized, hmac []byte
-    serialized, hmac = data_and_hmac[:len(data_and_hmac)-HMACLength], data_and_hmac[len(data_and_hmac)-HMACLength:]
+    serialized, hmac = data_and_hmac[:len(data_and_hmac)-HMACLength],
+                        data_and_hmac[len(data_and_hmac)-HMACLength:]
 
     err = json.Unmarshal(serialized, &userdata)
     if err != nil {
         return nil, errors.New("The serialized json part is tampered!!!!")
+    }
+
+    if len(userdata.ArgonSalt) != SaltLength {
+        return nil, errors.New("The ArgonSalt length is wrong! It must be tampered with")
     }
 
     // Check the integrity of this user struct
@@ -338,7 +347,12 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
     }
 
     if !userlib.HMACEqual(regen_hmac, hmac) {
-        return nil, errors.New("This data is already tampered or the password provided a wrong password")
+        return nil, errors.New(
+            "This data (or ArgonSalt) is already tampered or the password provided a wrong password")
+    }
+
+    if len(userdata.PasswordSalt) != SaltLength {
+        return nil, errors.New("The PasswordSalt length is wrong! It must be tampered with")
     }
 
     // Check the correctness of the password
@@ -348,8 +362,6 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
             return nil, errors.New("You provided the wrong password")
         }
     }
-
-
 
 	return &userdata, nil
 }

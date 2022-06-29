@@ -21,6 +21,8 @@ import (
 	userlib "github.com/cs161-staff/project2-userlib"
 
 	"github.com/cs161-staff/project2-starter-code/client"
+    "fmt"
+    "encoding/json"
 )
 
 func TestSetupAndExecution(t *testing.T) {
@@ -47,9 +49,9 @@ var _ = Describe("Client Tests", func() {
 
 	// A few user declarations that may be used for testing. Remember to initialize these before you
 	// attempt to use them!
-	var alice *client.User
-	var bob *client.User
-	var charles *client.User
+	// var alice *client.User
+	// var bob *client.User
+	// var charles *client.User
 	// var doris *client.User
 	// var eve *client.User
 	// var frank *client.User
@@ -58,16 +60,16 @@ var _ = Describe("Client Tests", func() {
 	// var ira *client.User
 
 	// These declarations may be useful for multi-session testing.
-	var alicePhone *client.User
-	var aliceLaptop *client.User
-	var aliceDesktop *client.User
+	// var alicePhone *client.User
+	// var aliceLaptop *client.User
+	// var aliceDesktop *client.User
 
 	var err error
 
 	// A bunch of filenames that may be useful.
-	aliceFile := "aliceFile.txt"
-	bobFile := "bobFile.txt"
-	charlesFile := "charlesFile.txt"
+	// aliceFile := "aliceFile.txt"
+	// bobFile := "bobFile.txt"
+	// charlesFile := "charlesFile.txt"
 	// dorisFile := "dorisFile.txt"
 	// eveFile := "eveFile.txt"
 	// frankFile := "frankFile.txt"
@@ -87,14 +89,105 @@ var _ = Describe("Client Tests", func() {
 
 		Specify("Basic Test: Testing InitUser/GetUser on a single user.", func() {
 			userlib.DebugMsg("Initializing user Alice.")
-			alice, err = client.InitUser("alice", defaultPassword)
+			_, err = client.InitUser("alice", defaultPassword)
 			Expect(err).To(BeNil())
 
 			userlib.DebugMsg("Getting user Alice.")
-			aliceLaptop, err = client.GetUser("alice", defaultPassword)
+			_, err = client.GetUser("alice", defaultPassword)
 			Expect(err).To(BeNil())
 		})
 
+        Specify("Acccount Testing: Type the wrong password", func(){
+            userlib.DebugMsg("Initialize Jim")
+            _, err = client.InitUser("Jim", defaultPassword)
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Type the wrong password")
+            _, err = client.GetUser("Jim", defaultPassword + "wrong")
+            userlib.DebugMsg(fmt.Sprint(err))
+            Expect(err).ToNot(BeNil())
+
+        })
+
+        Specify("Account Testing: Create an already exist account", func(){
+            jimuuid := client.GetUserUUID("Jim")
+            userlib.DatastoreSet(jimuuid, []byte{})
+
+            userlib.DebugMsg("Get an existing account")
+            _, err = client.InitUser("Jim", defaultPassword)
+            userlib.DebugMsg(fmt.Sprint(err))
+            Expect(err).ToNot(BeNil())
+        })
+
+        Specify("Account Testing: Tampering", func(){
+            userlib.DebugMsg("Initialize Jim")
+            _, err = client.InitUser("Jim", defaultPassword)
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Tampered with the ArgonSalt")
+            // Directly interact with the datastore
+            jimuuid := client.GetUserUUID("Jim")
+            data_and_hmac, ok := userlib.DatastoreGet(jimuuid)
+            if !ok {
+                panic("Should not happen")
+            }
+            serialized, hmac := data_and_hmac[:len(data_and_hmac)-client.HMACLength],
+                                data_and_hmac[len(data_and_hmac)-client.HMACLength:]
+
+            var tmpUser client.User
+
+            err = json.Unmarshal(serialized, &tmpUser)
+            if err != nil{
+                panic(err)
+            }
+            // Tampered with the ArgonSalt
+            tmpUser.ArgonSalt = userlib.RandomBytes(client.SaltLength)
+
+            // Seralized the tampered data
+            tampered_serialized, err := json.Marshal(tmpUser)
+            if err != nil{
+                panic(err)
+            }
+            data_and_hmac = append(tampered_serialized,
+                            hmac...)
+            userlib.DatastoreSet(jimuuid, data_and_hmac)
+
+            userlib.DebugMsg("Try to Get a user that is tampered with")
+            _, err = client.GetUser("Jim", defaultPassword)
+            userlib.DebugMsg(fmt.Sprint(err))
+            Expect(err).ToNot(BeNil())
+
+            userlib.DebugMsg("Mess up the JSON format")
+            
+            tampered_serialized = serialized[10:]
+
+            data_and_hmac = append(tampered_serialized, hmac...)
+            userlib.DatastoreSet(jimuuid, data_and_hmac)
+
+            userlib.DebugMsg("Try to Get a user that its JSON is messed up")
+
+            _, err = client.GetUser("Jim", defaultPassword)
+            userlib.DebugMsg(fmt.Sprint(err))
+            Expect(err).ToNot(BeNil())
+
+            userlib.DatastoreDelete(jimuuid)
+            userlib.DebugMsg("Try to Get a user that its record is deleted")
+            
+            _, err = client.GetUser("Jim", defaultPassword)
+            userlib.DebugMsg(fmt.Sprint(err))
+            Expect(err).ToNot(BeNil())
+
+            userlib.DatastoreSet(jimuuid, []byte("too few bytes"))
+
+            userlib.DebugMsg("Try to Get a user that its data length is shorter than HMACLength")
+
+            _, err = client.GetUser("Jim", defaultPassword)
+            userlib.DebugMsg(fmt.Sprint(err))
+            Expect(err).ToNot(BeNil())
+
+        })
+
+        /*
 		Specify("Basic Test: Testing Single User Store/Load/Append.", func() {
 			userlib.DebugMsg("Initializing user Alice.")
 			alice, err = client.InitUser("alice", defaultPassword)
@@ -117,7 +210,9 @@ var _ = Describe("Client Tests", func() {
 			Expect(err).To(BeNil())
 			Expect(data).To(Equal([]byte(contentOne + contentTwo + contentThree)))
 		})
+        */
 
+        /*
 		Specify("Basic Test: Testing Create/Accept Invite Functionality with multiple users and multiple instances.", func() {
 			userlib.DebugMsg("Initializing users Alice (aliceDesktop) and Bob.")
 			aliceDesktop, err = client.InitUser("alice", defaultPassword)
@@ -174,7 +269,9 @@ var _ = Describe("Client Tests", func() {
 			Expect(err).To(BeNil())
 			Expect(data).To(Equal([]byte(contentOne + contentTwo + contentThree)))
 		})
+        */
 
+        /*
 		Specify("Basic Test: Testing Revoke Functionality", func() {
 			userlib.DebugMsg("Initializing users Alice, Bob, and Charlie.")
 			alice, err = client.InitUser("alice", defaultPassword)
@@ -242,6 +339,7 @@ var _ = Describe("Client Tests", func() {
 			err = charles.AppendToFile(charlesFile, []byte(contentTwo))
 			Expect(err).ToNot(BeNil())
 		})
+        */
 
 	})
 })

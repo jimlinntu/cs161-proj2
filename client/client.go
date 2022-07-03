@@ -210,9 +210,23 @@ func (user *User) GetHMAC() []byte{
     return hmac
 }
 
+// ================== Expose private variables only for debugging =============
+func (user *User) PrivateKey() userlib.PKEDecKey{
+    return user.privateKey
+}
+
+func (user *User) SignKey() userlib.DSSignKey{
+    return user.signKey
+}
+// ============================================================================
+
+
 // NOTE: The following methods have toy (insecure!) implementations.
 
 func InitUser(username string, password string) (userdataptr *User, err error) {
+    if len(username) == 0 {
+        return nil, errors.New("username should at least contain one character")
+    }
 	var userdata User
 
     var useruuid uuid.UUID
@@ -338,10 +352,9 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
     // Check the integrity of this user struct
     // NOTE: we directly use the ArgonSalt because if the attacker tampered with it
     //       the hmac will directly fail
-    var rootKey []byte
-    rootKey = userlib.Argon2Key([]byte(password), userdata.ArgonSalt, 16)
+    userdata.rootKey = userlib.Argon2Key([]byte(password), userdata.ArgonSalt, 16)
 
-    regen_hmac, err := userlib.HMACEval(GetHMACKey(rootKey), serialized)
+    regen_hmac, err := userlib.HMACEval(GetHMACKey(userdata.rootKey), serialized)
     if err != nil {
         panic(err)
     }
@@ -361,6 +374,27 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
         if regen_hashed_password[i] != userdata.HashedPassword[i]{
             return nil, errors.New("You provided the wrong password")
         }
+    }
+
+    // Decrpyt secret stuffs
+    var ciphertext []byte
+    var plaintext []byte
+
+    ciphertext = userdata.Encrypted_privateKey
+
+    plaintext = userlib.SymDec(GetEncryptKey(userdata.rootKey), ciphertext)
+
+    // recover the private key
+    if err := json.Unmarshal(plaintext, &userdata.privateKey); err != nil{
+        // should not happen because we already checked the integrity
+        panic(err)
+    }
+
+    ciphertext = userdata.Encrypted_signKey
+    plaintext = userlib.SymDec(GetEncryptKey(userdata.rootKey), ciphertext)
+
+    if err := json.Unmarshal(plaintext, &userdata.signKey); err != nil {
+        panic(err)
     }
 
 	return &userdata, nil

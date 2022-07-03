@@ -23,6 +23,7 @@ import (
 	"github.com/cs161-staff/project2-starter-code/client"
     "fmt"
     "encoding/json"
+    "reflect"
 )
 
 func TestSetupAndExecution(t *testing.T) {
@@ -185,6 +186,66 @@ var _ = Describe("Client Tests", func() {
             userlib.DebugMsg(fmt.Sprint(err))
             Expect(err).ToNot(BeNil())
 
+        })
+
+        Specify("Account Testing: Get a nonexistent account", func(){
+            userlib.DebugMsg("Try to get a nonexistent account")
+            _, err := client.GetUser("Jim", defaultPassword)
+            userlib.DebugMsg(fmt.Sprint(err))
+            Expect(err).ToNot(BeNil())
+        })
+
+        Specify("Account Testing: Deny empty string username", func(){
+            userlib.DebugMsg("Try to create an account with empty username")
+            _, err := client.InitUser("", defaultPassword)
+            userlib.DebugMsg(fmt.Sprint(err))
+            Expect(err).ToNot(BeNil())
+        })
+
+        Specify("Account Testing: Check private key is recovered successfully", func(){
+            jimuser, err := client.InitUser("Jim", defaultPassword)
+            Expect(err).To(BeNil())
+
+            jimuser2, err := client.GetUser("Jim", defaultPassword)
+            Expect(err).To(BeNil())
+
+            // Compare whether their privatekey types' bytes are the same
+
+            var left, right []byte
+
+            privateKey := jimuser.PrivateKey()
+            privateKey2 := jimuser2.PrivateKey()
+
+            left, err = json.Marshal(privateKey)
+            if err != nil {
+                panic(err)
+            }
+            right, err = json.Marshal(privateKey2)
+            if err != nil {
+                panic(err)
+            }
+
+            userlib.DebugMsg("Compare the initial private key and the recovered one")
+            eq := reflect.DeepEqual(left, right)
+            Expect(eq).To(BeTrue())
+
+            signKey := jimuser.SignKey()
+            signKey2 := jimuser2.SignKey()
+
+            left, err = json.Marshal(signKey)
+            if err != nil {
+                panic(err)
+            }
+
+            right, err = json.Marshal(signKey2)
+            if err != nil {
+                panic(err)
+            }
+
+            // sign key should be the same
+            userlib.DebugMsg("Compare the initial sign key and the recovered one")
+            eq = reflect.DeepEqual(left, right)
+            Expect(eq).To(BeTrue())
         })
 
         /*

@@ -14,7 +14,7 @@ import (
 	// hex.EncodeToString(...) is useful for converting []byte to string
 
 	// Useful for string manipulation
-	"strings"
+	_ "strings"
 
 	// Useful for formatting strings (e.g. `fmt.Sprintf`).
 	"fmt"
@@ -158,7 +158,7 @@ type FileMetadata struct {
 }
 
 func InitFileMetadata(
-    username string, filename string) (*FileMetadata, error){
+    username string, filename string) *FileMetadata{
     var filemetadata FileMetadata
     filemetadata.IsOwner = true
     filemetadata.Filename = filename
@@ -178,16 +178,11 @@ func InitFileMetadata(
             filemetadata.Lockbox.GetEncryptKey(),
             filemetadata.Lockbox.GetHMACKey(), &fileInfoNode)
 
-    // Store in the persistent storage
-    _, ok := userlib.DatastoreGet(filemetadata.FileInfoNodeUUID)
-    if ok {
-        return nil, errors.New("Detect a malicious action: This FileInfoNode UUID is already used")
-    }
-
+    // Store in the persistent storage (NOTE: we won't check when writing stuff)
     // Put the encrypted and hmac onto the datastore
     userlib.DatastoreSet(filemetadata.FileInfoNodeUUID, ciphertext_and_hmac)
 
-    return &filemetadata, nil
+    return &filemetadata
 }
 
 func InitFileMetadataFromInivitation(filename string, invitation *Invitation) *FileMetadata{
@@ -310,6 +305,74 @@ func (fInfoNode *FileInfoNode) append_new_node(lockbox *Lockbox, content []byte)
     }
     // Increment the length
     fInfoNode.Length++
+    return nil
+}
+
+func (fInfoNode *FileInfoNode) load_content(
+            lockbox *Lockbox) ([]byte, error){
+
+    var head, tail, cur uuid.UUID
+    head, tail = fInfoNode.FileContentHead, fInfoNode.FileContentTail
+    cur = head
+
+    var content []byte
+
+    // Traversing the linked list
+    for i := 0; i < fInfoNode.Length; i++{
+        encKey := lockbox.GetContentEncryptKey(i)
+        hmacKey := lockbox.GetContentHMACKey(i)
+        
+        var curContentNode FileContentNode
+        err := LoadStructFromDatastore(encKey, hmacKey, cur, &curContentNode)
+
+        if err != nil{
+            // err because of malicious actions
+            return nil, err
+        }
+
+        // append the content
+        content = append(content, curContentNode.Content...)
+
+        // sanity check: check if the last node is the same as tail
+        if i == fInfoNode.Length-1 && !reflect.DeepEqual(cur, tail){
+            panic("cur and tail should be the same for the last step")
+        }
+        // move to the next one
+        cur = curContentNode.Next
+    }
+    return content, nil
+}
+
+func (f *FileInfoNode) delete_all_content(lockbox *Lockbox) error{
+    var head, cur uuid.UUID
+
+    head = f.FileContentHead
+    cur = head
+
+    for i := 0; i < f.Length; i++{
+        // Load the next node first
+        encKey := lockbox.GetContentEncryptKey(i)
+        hmacKey := lockbox.GetContentHMACKey(i)
+        
+        var curContentNode FileContentNode
+        err := LoadStructFromDatastore(encKey, hmacKey, cur, &curContentNode)
+
+        if err != nil {
+            // malicious actions happen
+            return err
+        }
+        
+        // delete the current one
+        userlib.DatastoreDelete(cur)
+        // move to the next one
+        cur = curContentNode.Next
+    }
+
+    // Reset to its default value
+    f.FileContentHead = uuid.UUID{}
+    f.FileContentTail = uuid.UUID{}
+    f.Length = 0
+
     return nil
 }
 
@@ -497,8 +560,8 @@ func GetEncryptKey(rootKey []byte) []byte{
 //      it will allow the attacker to swap two records without detection
 //      For example, {file2: Enc(key, file1)}, {file1: Enc(key, file2)}
 // Thus we must use {file1, Enc(key + file1, file1)}, {file2: Enc(key + file2, file2)}
-func GetFileMetadataEncryptKey(rootKey []byte, filename string) []byte{
-    encryptKey, err := userlib.HashKDF(rootKey, []byte("encrypt" + filename))
+func (user *User) GetFileMetadataEncryptKey(filename string) []byte{
+    encryptKey, err := userlib.HashKDF(user.rootKey, []byte("encrypt" + filename))
     if err != nil {
         panic(err)
     }
@@ -506,8 +569,8 @@ func GetFileMetadataEncryptKey(rootKey []byte, filename string) []byte{
 }
 
 // Same reason as GetFileMetadataEncryptKey
-func GetFileMetadataHMACKey(rootKey []byte, filename string) []byte{
-    hmacKey, err := userlib.HashKDF(rootKey, []byte("hmac" + filename))
+func (user *User) GetFileMetadataHMACKey(filename string) []byte{
+    hmacKey, err := userlib.HashKDF(user.rootKey, []byte("hmac" + filename))
     if err != nil {
         panic(err)
     }
@@ -537,7 +600,7 @@ func LoadStructFromDatastore(
     ciphertext_and_hmac, ok := userlib.DatastoreGet(id)
     if !ok {
         return errors.New(
-            fmt.Sprintf("This %v does not exist. It must be tampered with!", id))
+            fmt.Sprintf("This uuid = %v does not exist.", id))
     }
     // Decrypt
     err := CheckThenDecrypt(encryptKey, hmacKey, ciphertext_and_hmac, v)
@@ -753,15 +816,11 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
     var filemetadata *FileMetadata
     // This file does not exist, create a new FileMetadata
     if !ok {
-        filemetadata, err = InitFileMetadata(userdata.username, filename)
-        if err != nil {
-            return err
-        } 
-
-        // Write to the datastore
+        filemetadata = InitFileMetadata(userdata.username, filename)
+        // Write to the datastore (encrypt-and-mac by user's password)
         WriteToDatastoreFromStruct(
-            GetFileMetadataEncryptKey(userdata.rootKey, filename),
-            GetFileMetadataHMACKey(userdata.rootKey, filename),
+            userdata.GetFileMetadataEncryptKey(filename),
+            userdata.GetFileMetadataHMACKey(filename),
             filemetadatauuid, &filemetadata)
 
         // Append a node
@@ -772,23 +831,69 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
             filemetadata.FileInfoNodeUUID, &fileInfoNode)
 
         if err != nil {
-            panic(`This should not happen because we have no concurrency issues and
-I assume there is no concurrent attack`)
+            // NOTE: This cannot be tested because the attacker must execute an concurrent attack
+            //       during this function's execution
+            return errors.New("file Info Node is tampered with by the attacker")
         }
 
         // Add a new node with its content
-        err = fileInfoNode.append_new_node(&filemetadata.Lockbox,content)
+        err = fileInfoNode.append_new_node(&filemetadata.Lockbox, content)
         if err != nil{
-            return 
+            panic("should not happen because all we do is simply writing stuff without loading anything")
         }
         // Write the updated FileInfoNode back
         WriteToDatastoreFromStruct(
             filemetadata.Lockbox.GetEncryptKey(),
             filemetadata.Lockbox.GetHMACKey(),
             filemetadata.FileInfoNodeUUID, &fileInfoNode)
+        return nil
     }
+
+    // Load the existing filemetadata
+    filemetadata = new(FileMetadata)
+    err = LoadStructFromDatastore(
+        userdata.GetFileMetadataEncryptKey(filename),
+        userdata.GetFileMetadataHMACKey(filename),
+        filemetadatauuid, filemetadata)
+
+    if err != nil {
+        return err
+    }
+
+    var fileInfoNode FileInfoNode
+    if filemetadata.IsOwner {
+        // Load FileInfoNode back
+        err = LoadStructFromDatastore(
+            filemetadata.Lockbox.GetEncryptKey(),
+            filemetadata.Lockbox.GetHMACKey(),
+            filemetadata.FileInfoNodeUUID, &fileInfoNode)
+        if err != nil {
+            return err
+        }
+        
+        // Before overwriting all the content, we delete the existingexisting  content nodes first
+        err = fileInfoNode.delete_all_content(&filemetadata.Lockbox)
+        if err != nil{
+            return err
+        }
+        // NOTE: we haven't write FileInfoNode back to the Datastore
+
+        // Append a new node
+        err = fileInfoNode.append_new_node(&filemetadata.Lockbox, content)
+        if err != nil{
+            panic("should not happen because all we do is simply writing stuff without loading anything")
+        }
+
+        // Write back
+        WriteToDatastoreFromStruct(
+            filemetadata.Lockbox.GetEncryptKey(),
+            filemetadata.Lockbox.GetHMACKey(),
+            filemetadata.FileInfoNodeUUID, &fileInfoNode)
+    }else{
+        panic("TODO")
+    }
+
     // Otherwise, overwrite the content
-    panic("TODO")
     return nil
 }
 
@@ -796,17 +901,43 @@ func (userdata *User) AppendToFile(filename string, content []byte) error {
 	return nil
 }
 
-func (userdata *User) LoadFile(filename string) (content []byte, err error) {
-	storageKey, err := uuid.FromBytes(userlib.Hash([]byte(filename + userdata.username))[:16])
-	if err != nil {
-		return nil, err
-	}
-	dataJSON, ok := userlib.DatastoreGet(storageKey)
-	if !ok {
-		return nil, errors.New(strings.ToTitle("file not found"))
-	}
-	err = json.Unmarshal(dataJSON, &content)
-	return content, err
+func (user *User) LoadFile(filename string) (content []byte, err error) {
+    filemetadatauuid := GetFileMetadataUUID(user.username, filename)
+
+    var filemetadata FileMetadata
+
+    err = LoadStructFromDatastore(
+        user.GetFileMetadataEncryptKey(filename),
+        user.GetFileMetadataHMACKey(filename),
+        filemetadatauuid, &filemetadata)
+
+    if err != nil {
+        // It may be triggered by
+        // * An attacker has tampered with the record
+        // * This file does not exists
+        return nil, err
+    }
+
+    // Load the content
+    if filemetadata.IsOwner{
+        var fileInfoNode FileInfoNode
+        err = LoadStructFromDatastore(
+            filemetadata.Lockbox.GetEncryptKey(),
+            filemetadata.Lockbox.GetHMACKey(),
+            filemetadata.FileInfoNodeUUID, &fileInfoNode)
+
+        if err != nil {
+            return nil, err
+        }
+        // Load the content by traversing the linked list
+        content, err = fileInfoNode.load_content(&filemetadata.Lockbox)
+        if err != nil{
+            return nil, err
+        }
+    }else{
+        panic("TODO")
+    }
+    return content, nil
 }
 
 func (userdata *User) CreateInvitation(filename string, recipientUsername string) (

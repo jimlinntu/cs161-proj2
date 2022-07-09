@@ -40,6 +40,9 @@ const contentOne = "Bitcoin is Nick's favorite "
 const contentTwo = "digital "
 const contentThree = "cryptocurrency!"
 
+const filenameOne = "test1"
+const filenameTwo = "test2"
+
 // ================================================
 // Describe(...) blocks help you organize your tests
 // into functional categories. They can be nested into
@@ -272,6 +275,45 @@ var _ = Describe("Client Tests", func() {
 			Expect(data).To(Equal([]byte(contentOne + contentTwo + contentThree)))
 		})
         */
+
+        Specify("File handling: Test Owner Store and Load without tampering happening", func(){
+            jimuser, err := client.InitUser("jim", defaultPassword)
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Create a file")
+            err = jimuser.StoreFile(filenameOne, []byte(contentOne))
+
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Load a nonexistent file")
+            _, err = jimuser.LoadFile(filenameTwo)
+
+            Expect(err).ToNot(BeNil())
+
+            userlib.DebugMsg("Load an untampered file")
+            content, err := jimuser.LoadFile(filenameOne)
+
+            Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentOne)))
+
+            userlib.DebugMsg("Rewrite a file")
+            err = jimuser.StoreFile(filenameOne, []byte(contentTwo))
+
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Load a rewritten file")
+            content, err = jimuser.LoadFile(filenameOne)
+
+            Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentTwo)))
+        })
+
+        Specify("File handling: Test multiple sessions for Store and Load", func(){
+        })
+
+        // Specify("File handling: Test Owner Store when an attacker is present", func(){
+        //     jimuser, err := client.InitUser("jim", defaultPassword)
+        // })
 
         /*
 		Specify("Basic Test: Testing Create/Accept Invite Functionality with multiple users and multiple instances.", func() {

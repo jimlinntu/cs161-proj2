@@ -40,6 +40,8 @@ const contentOne = "Bitcoin is Nick's favorite "
 const contentTwo = "digital "
 const contentThree = "cryptocurrency!"
 
+const defaultUsername = "jim"
+
 const filenameOne = "test1"
 const filenameTwo = "test2"
 
@@ -309,6 +311,57 @@ var _ = Describe("Client Tests", func() {
         })
 
         Specify("File handling: Test multiple sessions for Store and Load", func(){
+            var jimuser, jimuser2, jimuser3 *client.User
+
+            jimuser, err = client.InitUser(defaultUsername, defaultPassword)
+            Expect(err).To(BeNil())
+
+            jimuser2, err = client.GetUser(defaultUsername, defaultPassword)
+            Expect(err).To(BeNil())
+
+            jimuser3, err = client.GetUser(defaultUsername, defaultPassword)
+            
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("User session 2 created a file")
+            err = jimuser2.StoreFile(filenameOne, []byte(contentTwo))
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("User session 1 load that file")
+            content, err := jimuser.LoadFile(filenameOne)
+            Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentTwo)))
+
+            userlib.DebugMsg("User session 3 load that file")
+            content, err = jimuser3.LoadFile(filenameOne)
+            Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentTwo)))
+            
+        })
+
+        Specify("File handling: Test Append (wo attackers tampering)", func(){
+            user, err := client.InitUser(defaultUsername, defaultPassword)
+
+            userlib.DebugMsg("Append to a nonexistent file")
+            err = user.AppendToFile(filenameOne, []byte(contentOne))
+            Expect(err).ToNot(BeNil())
+
+            err = user.StoreFile(filenameOne, []byte(contentOne))
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Append to an existing file")
+
+            err = user.AppendToFile(filenameOne, []byte(contentTwo))
+            Expect(err).To(BeNil())
+
+            err = user.AppendToFile(filenameOne, []byte(contentThree))
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Load the appended file")
+
+            content, err := user.LoadFile(filenameOne)
+            Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentOne + contentTwo + contentThree)))
         })
 
         // Specify("File handling: Test Owner Store when an attacker is present", func(){

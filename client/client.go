@@ -288,6 +288,7 @@ func (fInfoNode *FileInfoNode) append_new_node(lockbox *Lockbox, content []byte)
             return err
         }
         // Update the tail
+        oldtail_uuid := fInfoNode.FileContentTail
         fInfoNode.FileContentTail = new_uuid
         // The tail will point to the new tail
         tailContentNode.Next = new_uuid
@@ -297,7 +298,7 @@ func (fInfoNode *FileInfoNode) append_new_node(lockbox *Lockbox, content []byte)
         WriteToDatastoreFromStruct(
             lockbox.GetContentEncryptKey(fInfoNode.Length-1),
             lockbox.GetContentHMACKey(fInfoNode.Length-1),
-            new_uuid, &tailContentNode)
+            oldtail_uuid, &tailContentNode)
         WriteToDatastoreFromStruct(
             lockbox.GetContentEncryptKey(fInfoNode.Length),
             lockbox.GetContentHMACKey(fInfoNode.Length),
@@ -897,7 +898,52 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
     return nil
 }
 
-func (userdata *User) AppendToFile(filename string, content []byte) error {
+func (user *User) AppendToFile(filename string, content []byte) (err error) {
+    filemetadatauuid := GetFileMetadataUUID(user.username, filename)
+
+    var filemetadata FileMetadata
+
+    err = LoadStructFromDatastore(
+        user.GetFileMetadataEncryptKey(filename),
+        user.GetFileMetadataHMACKey(filename),
+        filemetadatauuid, &filemetadata)
+
+    if err != nil {
+        // It may be triggered by
+        // * An attacker has tampered with the record
+        // * This file does not exists
+        return err
+    }
+
+    var lockbox *Lockbox
+    var fileInfoNode FileInfoNode
+
+    if filemetadata.IsOwner {
+        lockbox = &filemetadata.Lockbox
+    }else{
+        panic("TODO")
+    }
+    
+    err = LoadStructFromDatastore(
+        lockbox.GetEncryptKey(),
+        lockbox.GetHMACKey(),
+        filemetadata.FileInfoNodeUUID, &fileInfoNode)
+
+    if err != nil{
+        // If the FileInfoNode is tampered, it will err
+        return err
+    }
+
+    err = fileInfoNode.append_new_node(lockbox, content)
+    if err != nil{
+        return err
+    }
+
+    // Update the FileInfoNode
+    WriteToDatastoreFromStruct(
+        lockbox.GetEncryptKey(),
+        lockbox.GetHMACKey(), filemetadata.FileInfoNodeUUID, &fileInfoNode)
+
 	return nil
 }
 

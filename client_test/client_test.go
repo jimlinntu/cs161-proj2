@@ -41,9 +41,12 @@ const contentTwo = "digital "
 const contentThree = "cryptocurrency!"
 
 const defaultUsername = "jim"
+const usernameTwo = "andy"
+const usernameThree = "candy"
 
 const filenameOne = "test1"
 const filenameTwo = "test2"
+const filenameThree = "test3"
 
 // ================================================
 // Describe(...) blocks help you organize your tests
@@ -55,7 +58,7 @@ var _ = Describe("Client Tests", func() {
 
 	// A few user declarations that may be used for testing. Remember to initialize these before you
 	// attempt to use them!
-	// var alice *client.User
+	var alice *client.User
 	// var bob *client.User
 	// var charles *client.User
 	// var doris *client.User
@@ -73,7 +76,7 @@ var _ = Describe("Client Tests", func() {
 	var err error
 
 	// A bunch of filenames that may be useful.
-	// aliceFile := "aliceFile.txt"
+	aliceFile := "aliceFile.txt"
 	// bobFile := "bobFile.txt"
 	// charlesFile := "charlesFile.txt"
 	// dorisFile := "dorisFile.txt"
@@ -253,7 +256,6 @@ var _ = Describe("Client Tests", func() {
             Expect(eq).To(BeTrue())
         })
 
-        /*
 		Specify("Basic Test: Testing Single User Store/Load/Append.", func() {
 			userlib.DebugMsg("Initializing user Alice.")
 			alice, err = client.InitUser("alice", defaultPassword)
@@ -276,7 +278,6 @@ var _ = Describe("Client Tests", func() {
 			Expect(err).To(BeNil())
 			Expect(data).To(Equal([]byte(contentOne + contentTwo + contentThree)))
 		})
-        */
 
         Specify("File handling: Test Owner Store and Load without tampering happening", func(){
             jimuser, err := client.InitUser("jim", defaultPassword)
@@ -367,6 +368,118 @@ var _ = Describe("Client Tests", func() {
         // Specify("File handling: Test Owner Store when an attacker is present", func(){
         //     jimuser, err := client.InitUser("jim", defaultPassword)
         // })
+
+        Specify("Test CreateInvitation", func(){
+            user, err := client.InitUser(defaultUsername, defaultPassword)
+            Expect(err).To(BeNil())
+            _, err = client.InitUser(usernameTwo, defaultPassword)
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Create an invitation on a nonexistent file")
+            _, err = user.CreateInvitation(filenameOne, usernameTwo)
+            userlib.DebugMsg(fmt.Sprint(err))
+            Expect(err).ToNot(BeNil())
+
+            userlib.DebugMsg("Create an invitation for a nonexistent user")
+            err = user.StoreFile(filenameOne, []byte(contentOne))
+            Expect(err).To(BeNil())
+            _, err = user.CreateInvitation(filenameOne, usernameThree)
+            userlib.DebugMsg(fmt.Sprint(err))
+            Expect(err).ToNot(BeNil())
+
+
+            userlib.DebugMsg("Create an invitation to a user")
+            _, err = user.CreateInvitation(filenameOne, usernameTwo)
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Reshare an invitation to a same user (expecting a panic)")
+            Expect(func(){
+                user.CreateInvitation(filenameOne, usernameTwo)
+            }).To(Panic())
+        })
+
+        Specify("Test Create and Accept Invitations wo an attacker", func(){
+            user, err := client.InitUser(defaultUsername, defaultPassword)
+            Expect(err).To(BeNil())
+            user2, err := client.InitUser(usernameTwo, defaultPassword)
+            Expect(err).To(BeNil())
+
+            err = user.StoreFile(filenameOne, []byte(contentOne))
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Create and then accept the invitation")
+            invPtr, err := user.CreateInvitation(filenameOne, usernameTwo)
+            Expect(err).To(BeNil())
+
+            err = user2.AcceptInvitation(defaultUsername, invPtr, filenameTwo)
+            Expect(err).To(BeNil())
+        })
+
+        Specify("Test Create and Accept Invitations and manipulate the files (wo an attacker)", func(){
+            user, err := client.InitUser(defaultUsername, defaultPassword)
+            Expect(err).To(BeNil())
+            user2, err := client.InitUser(usernameTwo, defaultPassword)
+            Expect(err).To(BeNil())
+
+            err = user.StoreFile(filenameOne, []byte(contentOne))
+            Expect(err).To(BeNil())
+
+            invPtr, err := user.CreateInvitation(filenameOne, usernameTwo)
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Load a file before sharing")
+            _, err = user2.LoadFile(filenameOne)
+            Expect(err).ToNot(BeNil())
+            _, err = user2.LoadFile(filenameTwo)
+            Expect(err).ToNot(BeNil())
+
+            err = user2.StoreFile(filenameTwo, []byte(contentOne))
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Accept a file with an already used filename")
+            err = user2.AcceptInvitation(defaultUsername, invPtr, filenameTwo)
+            userlib.DebugMsg(err.Error())
+            Expect(err).ToNot(BeNil())
+
+            userlib.DebugMsg("Accept a file")
+            err = user2.AcceptInvitation(defaultUsername, invPtr, filenameThree)
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Load a file not owned by me")
+            content, err := user2.LoadFile(filenameThree)
+            Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentOne)))
+
+            userlib.DebugMsg("user2 append a content. Test if user1 can see that change")
+
+            err = user2.AppendToFile(filenameThree, []byte(contentThree))
+            Expect(err).To(BeNil())
+
+            content, err = user.LoadFile(filenameOne)
+            Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentOne + contentThree)))
+
+            userlib.DebugMsg("user1 append a content. Test if user2 can see that change")
+
+            err = user.AppendToFile(filenameOne, []byte(contentTwo))
+            Expect(err).To(BeNil())
+
+            content, err = user2.LoadFile(filenameThree)
+            Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentOne + contentThree + contentTwo)))
+
+            userlib.DebugMsg("user2 overwrites the file. Test if user1 can see the change")
+
+            err = user2.StoreFile(filenameThree, []byte(contentTwo))
+            Expect(err).To(BeNil())
+
+            content, err = user.LoadFile(filenameOne)
+            Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentTwo)))
+        })
+
+        Specify("Test Create and Accept Invitations w an attacker tampering with", func(){
+        })
 
         /*
 		Specify("Basic Test: Testing Create/Accept Invite Functionality with multiple users and multiple instances.", func() {

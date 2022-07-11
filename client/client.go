@@ -134,7 +134,8 @@ type User struct {
 // This data struct will be encrypted by each user's password-derived key
 type FileMetadata struct {
     IsOwner bool
-    Filename string
+    // NOTE: we don't store the filename
+    // because 3.5.3: The client MUST prevent adversaries from learning filenames and the length of filenames.
 
     // ================== Non-owner =====================
     // non-owner will use this data struct to access the lockbox
@@ -154,7 +155,6 @@ func InitFileMetadata(
     username string, filename string) *FileMetadata{
     var filemetadata FileMetadata
     filemetadata.IsOwner = true
-    filemetadata.Filename = filename
     filemetadata.SharedUser2LockboxInfo = make(map[string]LockboxInfo)
 
     // Create this file's root key
@@ -178,7 +178,6 @@ func InitFileMetadata(
 func InitFileMetadataFromInivitation(filename string, invitation *Invitation) *FileMetadata{
     var filemetadata FileMetadata
     filemetadata.IsOwner = false // not an owner
-    filemetadata.Filename = filename // the new filename under this user's namespace
     // store {where is FileInfoNode, how to open the lockbox, where is the lockbox}
     filemetadata.LockboxInfo = invitation.LockboxInfo
     return &filemetadata

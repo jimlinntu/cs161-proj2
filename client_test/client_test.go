@@ -63,9 +63,9 @@ var _ = Describe("Client Tests", func() {
 	var charles *client.User
 	var doris *client.User
 	// var eve *client.User
-	// var frank *client.User
-	// var grace *client.User
-	// var horace *client.User
+	var frank *client.User
+	var grace *client.User
+	var horace *client.User
 	// var ira *client.User
 
 	// These declarations may be useful for multi-session testing.
@@ -309,6 +309,21 @@ var _ = Describe("Client Tests", func() {
 
             Expect(err).To(BeNil())
             Expect(content).To(Equal([]byte(contentTwo)))
+        })
+
+
+        Specify("File handling: Test zero length filename", func(){
+            // 3.5.6: Filenames MAY be any length, including zero (empty string).
+            user, err := client.InitUser(defaultUsername, defaultPassword)
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Store a file with a zero-length filename")
+            err = user.StoreFile("", []byte{})
+            Expect(err).To(BeNil())
+
+            content, err := user.LoadFile("")
+            Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte{}))
         })
 
         Specify("File handling: Test multiple sessions for Store and Load", func(){
@@ -677,6 +692,15 @@ var _ = Describe("Client Tests", func() {
             doris, err = client.InitUser("doris", defaultPassword)
 			Expect(err).To(BeNil())
 
+            frank, err = client.InitUser("frank", defaultPassword)
+			Expect(err).To(BeNil())
+
+            grace, err = client.InitUser("grace", defaultPassword)
+			Expect(err).To(BeNil())
+
+            horace, err = client.InitUser("horace", defaultPassword)
+			Expect(err).To(BeNil())
+
             err = alice.StoreFile(filenameOne, []byte(contentOne))
 			Expect(err).To(BeNil())
 
@@ -684,23 +708,36 @@ var _ = Describe("Client Tests", func() {
 Build a sharing tree:
 alice -> bob -> charles
       -> doris
+      -> frank -> grace -> horace
 `)
             invPtr, err := alice.CreateInvitation(filenameOne, bob.Username())
 			Expect(err).To(BeNil())
-
             err = bob.AcceptInvitation(alice.Username(), invPtr, bob.Username())
 			Expect(err).To(BeNil())
 
             invPtr, err = alice.CreateInvitation(filenameOne, doris.Username())
 			Expect(err).To(BeNil())
-            
             err = doris.AcceptInvitation(alice.Username(), invPtr, doris.Username())
+			Expect(err).To(BeNil())
+
+            invPtr, err = alice.CreateInvitation(filenameOne, frank.Username())
+			Expect(err).To(BeNil())
+            err = frank.AcceptInvitation(alice.Username(), invPtr, frank.Username())
 			Expect(err).To(BeNil())
 
             invPtr, err = bob.CreateInvitation(bob.Username(), charles.Username())
 			Expect(err).To(BeNil())
-
             err = charles.AcceptInvitation(bob.Username(), invPtr, charles.Username())
+			Expect(err).To(BeNil())
+
+            invPtr, err = frank.CreateInvitation(frank.Username(), grace.Username())
+			Expect(err).To(BeNil())
+            err = grace.AcceptInvitation(frank.Username(), invPtr, grace.Username())
+			Expect(err).To(BeNil())
+
+            invPtr, err = grace.CreateInvitation(grace.Username(), horace.Username())
+			Expect(err).To(BeNil())
+            err = horace.AcceptInvitation(grace.Username(), invPtr, horace.Username())
 			Expect(err).To(BeNil())
 
             err = alice.AppendToFile(filenameOne, []byte(contentTwo))
@@ -735,6 +772,36 @@ alice -> bob -> charles
             content, err = doris.LoadFile(doris.Username())
 			Expect(err).To(BeNil())
             Expect(content).To(Equal([]byte(contentOne + contentTwo + contentThree)))
+
+            userlib.DebugMsg("Frank/Grace/Horace should be able to see the file")
+
+            content, err = frank.LoadFile(frank.Username())
+			Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentOne + contentTwo + contentThree)))
+
+            content, err = grace.LoadFile(grace.Username())
+			Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentOne + contentTwo + contentThree)))
+
+            content, err = horace.LoadFile(horace.Username())
+			Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentOne + contentTwo + contentThree)))
+
+            userlib.DebugMsg("Grace Store/Append, Horace should be able to see it")
+
+            err = grace.StoreFile(grace.Username(), []byte(contentOne))
+			Expect(err).To(BeNil())
+
+            content, err = horace.LoadFile(horace.Username())
+			Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentOne)))
+
+            err = grace.AppendToFile(grace.Username(), []byte(contentTwo))
+			Expect(err).To(BeNil())
+
+            content, err = horace.LoadFile(horace.Username())
+			Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentOne + contentTwo)))
         })
 
 	})

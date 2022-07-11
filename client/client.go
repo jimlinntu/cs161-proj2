@@ -878,7 +878,6 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
     // Check if this file already exists
     filemetadatauuid := GetFileMetadataUUID(userdata.username, filename)
 
-    var _ []byte
     _, ok := userlib.DatastoreGet(filemetadatauuid)
 
     var filemetadata *FileMetadata
@@ -1124,6 +1123,7 @@ func (user *User) CreateInvitation(filename string, recipientUsername string) (
     // Create the invitation record in the Datastore
     invitationPtr = uuid.New()
     invitation := Invitation{LockboxInfo: *lockboxInfo}
+    // 3.6.5: The client MUST ensure the confidentiality and integrity of the secure file share invitations created by CreateInvitation().
     WriteToDatastoreFromStructByPKEAndDS(rPubKey, user.signKey, invitationPtr, &invitation)
 	return invitationPtr, nil
 }
@@ -1174,10 +1174,14 @@ func (user *User) RevokeAccess(filename string, recipientUsername string) error 
         return errors.New("Non-owner users cannot revoke a file's sharing")
     }
 
-    _, ok := filemetadata.SharedUser2LockboxInfo[recipientUsername]
+    // 3.6.7 The client MUST enforce that the file owner is able to revoke access from users who they directly shared the file with.
+    revokedLockboxInfo, ok := filemetadata.SharedUser2LockboxInfo[recipientUsername]
     if !ok {
         return errors.New("You did not share this file with this user or this user is not in your direct sharing list")
     }
+
+    // Delete the revoked lockbox
+    userlib.DatastoreDelete(revokedLockboxInfo.LockboxUUID)
 
     var old_lockbox Lockbox
     old_lockbox = filemetadata.Lockbox

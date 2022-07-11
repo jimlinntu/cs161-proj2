@@ -136,9 +136,6 @@ type FileMetadata struct {
     IsOwner bool
     Filename string
 
-    // add an indirection layer for head and tail
-    FileInfoNodeUUID uuid.UUID
-
     // ================== Non-owner =====================
     // non-owner will use this data struct to access the lockbox
     LockboxInfo LockboxInfo
@@ -151,10 +148,6 @@ type FileMetadata struct {
     // Only the owner will directly store its lockbox in this data struct
     Lockbox Lockbox
     // ==================================================
-
-    // Record the # of revoked users to generate different hash values
-    // for the FileInfoNodeUUID and FileContentNodeUUID
-    NumRevokedUsers int
 }
 
 func InitFileMetadata(
@@ -162,11 +155,7 @@ func InitFileMetadata(
     var filemetadata FileMetadata
     filemetadata.IsOwner = true
     filemetadata.Filename = filename
-    filemetadata.NumRevokedUsers = 0
     filemetadata.SharedUser2LockboxInfo = make(map[string]LockboxInfo)
-    // NOTE: the uuid id is f(owner's username, owner's filename, number of revoked users)
-    filemetadata.FileInfoNodeUUID = GetFileInfoUUID(
-        username, filename, filemetadata.NumRevokedUsers)
 
     // Create this file's root key
     filemetadata.Lockbox.InitLockbox()
@@ -181,7 +170,7 @@ func InitFileMetadata(
 
     // Store in the persistent storage (NOTE: we won't check when writing stuff)
     // Put the encrypted and hmac onto the datastore
-    userlib.DatastoreSet(filemetadata.FileInfoNodeUUID, ciphertext_and_hmac)
+    userlib.DatastoreSet(filemetadata.Lockbox.FileInfoNodeUUID, ciphertext_and_hmac)
 
     return &filemetadata
 }
@@ -190,9 +179,7 @@ func InitFileMetadataFromInivitation(filename string, invitation *Invitation) *F
     var filemetadata FileMetadata
     filemetadata.IsOwner = false // not an owner
     filemetadata.Filename = filename // the new filename under this user's namespace
-    // Need to -> {head, tail}
-    filemetadata.FileInfoNodeUUID = invitation.FileInfoNodeUUID
-    // store {how to open the lockbox, where is the lockbox}
+    // store {where is FileInfoNode, how to open the lockbox, where is the lockbox}
     filemetadata.LockboxInfo = invitation.LockboxInfo
     return &filemetadata
 }
@@ -466,6 +453,7 @@ func (l *LockboxInfo) GetHMACKey() []byte{
 }
 
 type Lockbox struct {
+    FileInfoNodeUUID uuid.UUID
     FileKey []byte // the root key to decrypt and authenticate the file content
 }
 
@@ -473,11 +461,11 @@ type Lockbox struct {
 // 1. where is the file start node and end node
 // 2. where is the lockbox and how to open the lockbox
 type Invitation struct{
-    FileInfoNodeUUID uuid.UUID `json:"f"`// {head, tail}
     LockboxInfo LockboxInfo `json:"l"`
 }
 
 func (l *Lockbox) InitLockbox() {
+    l.FileInfoNodeUUID = uuid.New()
     l.FileKey = userlib.RandomBytes(16)
 }
 
@@ -519,24 +507,6 @@ func GetFileMetadataUUID(username string, filename string) (uuid.UUID){
     hash_filename := userlib.Hash([]byte(filename))
     
     concat := append(hash_username, hash_filename...)
-
-    hashed := userlib.Hash(concat)[:16]
-    id, err := uuid.FromBytes(hashed)
-    if err != nil {
-        panic(err)
-    }
-    return id
-}
-
-// uuid = hash(hash(username) || hash(filename) || hash("info") || hash(numRevoked))
-func GetFileInfoUUID(username string, filename string, numRevoked int) uuid.UUID{
-    hash_username := userlib.Hash([]byte(username))
-    hash_filename := userlib.Hash([]byte(filename))
-    hash_numRevoked := userlib.Hash([]byte(fmt.Sprintf("numRevoked:%d", numRevoked)))
-
-    concat := append(hash_username, hash_filename...)
-    concat = append(concat, []byte("info")...)
-    concat = append(concat, hash_numRevoked...)
 
     hashed := userlib.Hash(concat)[:16]
     id, err := uuid.FromBytes(hashed)
@@ -710,6 +680,10 @@ func WriteToDatastoreFromStructByPKEAndDS(
 }
 
 // ================== Expose private variables only for debugging =============
+
+func (user *User) Username() string {
+    return user.username
+}
 func (user *User) PrivateKey() userlib.PKEDecKey{
     return user.privateKey
 }
@@ -717,6 +691,7 @@ func (user *User) PrivateKey() userlib.PKEDecKey{
 func (user *User) SignKey() userlib.DSSignKey{
     return user.signKey
 }
+
 // ============================================================================
 
 
@@ -922,7 +897,7 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
         err = LoadStructFromDatastore(
             filemetadata.Lockbox.GetEncryptKey(),
             filemetadata.Lockbox.GetHMACKey(),
-            filemetadata.FileInfoNodeUUID, &fileInfoNode)
+            filemetadata.Lockbox.FileInfoNodeUUID, &fileInfoNode)
 
         if err != nil {
             // NOTE: This cannot be tested because the attacker must execute an concurrent attack
@@ -939,7 +914,7 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
         WriteToDatastoreFromStruct(
             filemetadata.Lockbox.GetEncryptKey(),
             filemetadata.Lockbox.GetHMACKey(),
-            filemetadata.FileInfoNodeUUID, &fileInfoNode)
+            filemetadata.Lockbox.FileInfoNodeUUID, &fileInfoNode)
         return nil
     }
 
@@ -973,7 +948,7 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
     err = LoadStructFromDatastore(
         lockbox.GetEncryptKey(),
         lockbox.GetHMACKey(),
-        filemetadata.FileInfoNodeUUID, &fileInfoNode)
+        lockbox.FileInfoNodeUUID, &fileInfoNode)
     if err != nil {
         return err
     }
@@ -993,7 +968,7 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 
     // Write back
     WriteToDatastoreFromStruct(lockbox.GetEncryptKey(),lockbox.GetHMACKey(),
-        filemetadata.FileInfoNodeUUID, &fileInfoNode)
+        lockbox.FileInfoNodeUUID, &fileInfoNode)
 
     // Otherwise, overwrite the content
     return nil
@@ -1035,7 +1010,7 @@ func (user *User) AppendToFile(filename string, content []byte) (err error) {
     err = LoadStructFromDatastore(
         lockbox.GetEncryptKey(),
         lockbox.GetHMACKey(),
-        filemetadata.FileInfoNodeUUID, &fileInfoNode)
+        lockbox.FileInfoNodeUUID, &fileInfoNode)
 
     if err != nil{
         // If the FileInfoNode is tampered, it will err
@@ -1050,7 +1025,7 @@ func (user *User) AppendToFile(filename string, content []byte) (err error) {
     // Update the FileInfoNode
     WriteToDatastoreFromStruct(
         lockbox.GetEncryptKey(),
-        lockbox.GetHMACKey(), filemetadata.FileInfoNodeUUID, &fileInfoNode)
+        lockbox.GetHMACKey(), lockbox.FileInfoNodeUUID, &fileInfoNode)
 
 	return nil
 }
@@ -1091,7 +1066,7 @@ func (user *User) LoadFile(filename string) (content []byte, err error) {
 
     err = LoadStructFromDatastore(
         lockbox.GetEncryptKey(), lockbox.GetHMACKey(),
-        filemetadata.FileInfoNodeUUID, &fileInfoNode)
+        lockbox.FileInfoNodeUUID, &fileInfoNode)
 
     if err != nil {
         return nil, err
@@ -1149,8 +1124,7 @@ func (user *User) CreateInvitation(filename string, recipientUsername string) (
 
     // Create the invitation record in the Datastore
     invitationPtr = uuid.New()
-    invitation := Invitation{FileInfoNodeUUID: filemetadata.FileInfoNodeUUID,
-               LockboxInfo: *lockboxInfo}
+    invitation := Invitation{LockboxInfo: *lockboxInfo}
     WriteToDatastoreFromStructByPKEAndDS(rPubKey, user.signKey, invitationPtr, &invitation)
 	return invitationPtr, nil
 }
@@ -1186,6 +1160,80 @@ func (user *User) AcceptInvitation(senderUsername string, invitationPtr uuid.UUI
 	return nil
 }
 
-func (userdata *User) RevokeAccess(filename string, recipientUsername string) error {
+func (user *User) RevokeAccess(filename string, recipientUsername string) error {
+    var filemetadata FileMetadata
+    filemetadatauuid := GetFileMetadataUUID(user.username, filename)
+
+    err := LoadStructFromDatastore(
+        user.GetFileMetadataEncryptKey(filename),
+        user.GetFileMetadataHMACKey(filename), filemetadatauuid, &filemetadata)
+    if err != nil{
+        return err
+    }
+
+    if !filemetadata.IsOwner {
+        return errors.New("Non-owner users cannot revoke a file's sharing")
+    }
+
+    _, ok := filemetadata.SharedUser2LockboxInfo[recipientUsername]
+    if !ok {
+        return errors.New("You did not share this file with this user or this user is not in your direct sharing list")
+    }
+
+    var old_lockbox Lockbox
+    old_lockbox = filemetadata.Lockbox
+    // Generate the new key and new FileInfoNodeUUID
+    // so that a revoked user cannot see the file change
+    filemetadata.Lockbox.InitLockbox()
+
+    var fileInfoNode FileInfoNode
+    err = LoadStructFromDatastore(
+            old_lockbox.GetEncryptKey(), old_lockbox.GetHMACKey(),
+            old_lockbox.FileInfoNodeUUID, &fileInfoNode)
+    if err != nil {
+        return err
+    }
+    // clear up FileInfoNodeUUID after loading
+    userlib.DatastoreDelete(old_lockbox.FileInfoNodeUUID)
+
+    // Load the content first
+    var content []byte
+    content, err = fileInfoNode.load_content(&old_lockbox)
+    if err != nil {
+        return err
+    }
+
+    // Delete all the content in the Datastore
+    err = fileInfoNode.delete_all_content(&old_lockbox)
+    if err != nil {
+        return err
+    }
+
+    // Reencrypt the file using the new key
+    err = fileInfoNode.append_new_node(&filemetadata.Lockbox, content)
+    if err != nil {
+        return err
+    }
+
+    // Loop all the lockboxes I directly share
+    // and put the new lockbox FileKey into them *except* recipientUsername
+    delete(filemetadata.SharedUser2LockboxInfo, recipientUsername)
+    for _, lockboxInfo := range filemetadata.SharedUser2LockboxInfo {
+        // Write the new key and new FileInfoNodeUUID into the lockbox
+        WriteToDatastoreFromStruct(lockboxInfo.GetEncryptKey(), lockboxInfo.GetHMACKey(),
+                                   lockboxInfo.LockboxUUID, &filemetadata.Lockbox)
+    }
+
+    // Write back using the new key
+    WriteToDatastoreFromStruct(
+                filemetadata.Lockbox.GetEncryptKey(),
+                filemetadata.Lockbox.GetHMACKey(),
+                filemetadata.Lockbox.FileInfoNodeUUID, &fileInfoNode)
+
+    // Write the updated FileMetadata back
+    WriteToDatastoreFromStruct(
+                user.GetFileMetadataEncryptKey(filename),
+                user.GetFileMetadataHMACKey(filename), filemetadatauuid, &filemetadata)
+
 	return nil
 }

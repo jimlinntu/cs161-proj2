@@ -59,9 +59,9 @@ var _ = Describe("Client Tests", func() {
 	// A few user declarations that may be used for testing. Remember to initialize these before you
 	// attempt to use them!
 	var alice *client.User
-	// var bob *client.User
-	// var charles *client.User
-	// var doris *client.User
+	var bob *client.User
+	var charles *client.User
+	var doris *client.User
 	// var eve *client.User
 	// var frank *client.User
 	// var grace *client.User
@@ -667,6 +667,79 @@ var _ = Describe("Client Tests", func() {
 			Expect(err).ToNot(BeNil())
 		})
         */
+
+        Specify("Test Revoke wo an active attacker", func(){
+            alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+            bob, err = client.InitUser("bob", defaultPassword)
+			Expect(err).To(BeNil())
+
+            charles, err = client.InitUser("charles", defaultPassword)
+			Expect(err).To(BeNil())
+
+            doris, err = client.InitUser("doris", defaultPassword)
+			Expect(err).To(BeNil())
+
+            err = alice.StoreFile(filenameOne, []byte(contentOne))
+			Expect(err).To(BeNil())
+
+            userlib.DebugMsg(`
+Build a sharing tree:
+alice -> bob -> charles
+      -> doris
+`)
+            invPtr, err := alice.CreateInvitation(filenameOne, bob.Username())
+			Expect(err).To(BeNil())
+
+            err = bob.AcceptInvitation(alice.Username(), invPtr, bob.Username())
+			Expect(err).To(BeNil())
+
+            invPtr, err = alice.CreateInvitation(filenameOne, doris.Username())
+			Expect(err).To(BeNil())
+            
+            err = doris.AcceptInvitation(alice.Username(), invPtr, doris.Username())
+			Expect(err).To(BeNil())
+
+            invPtr, err = bob.CreateInvitation(bob.Username(), charles.Username())
+			Expect(err).To(BeNil())
+
+            err = charles.AcceptInvitation(bob.Username(), invPtr, charles.Username())
+			Expect(err).To(BeNil())
+
+            err = alice.AppendToFile(filenameOne, []byte(contentTwo))
+			Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Test charles can see alice's change")
+            content, err := charles.LoadFile(charles.Username())
+			Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentOne + contentTwo)))
+
+            err = alice.RevokeAccess(filenameOne, bob.Username())
+			Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Revoke bob's sharing should disable bob to manipulate the file")
+            err = bob.AppendToFile(bob.Username(), []byte("blabla"))
+            userlib.DebugMsg(err.Error())
+			Expect(err).ToNot(BeNil())
+
+            userlib.DebugMsg("Revoke bob's sharing should disable charles to manipulate the file")
+            _, err = charles.LoadFile(charles.Username())
+            userlib.DebugMsg(err.Error())
+			Expect(err).ToNot(BeNil())
+
+            userlib.DebugMsg("While doris should still be able to see the file")
+            content, err = doris.LoadFile(doris.Username())
+			Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentOne + contentTwo)))
+            userlib.DebugMsg("And doris should also be able to see the change of file")
+
+            err = alice.AppendToFile(filenameOne, []byte(contentThree))
+			Expect(err).To(BeNil())
+            content, err = doris.LoadFile(doris.Username())
+			Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentOne + contentTwo + contentThree)))
+        })
 
 	})
 })

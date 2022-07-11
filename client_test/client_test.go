@@ -69,16 +69,16 @@ var _ = Describe("Client Tests", func() {
 	// var ira *client.User
 
 	// These declarations may be useful for multi-session testing.
-	// var alicePhone *client.User
-	// var aliceLaptop *client.User
-	// var aliceDesktop *client.User
+	var alicePhone *client.User
+	var aliceLaptop *client.User
+	var aliceDesktop *client.User
 
 	var err error
 
 	// A bunch of filenames that may be useful.
 	aliceFile := "aliceFile.txt"
-	// bobFile := "bobFile.txt"
-	// charlesFile := "charlesFile.txt"
+	bobFile := "bobFile.txt"
+	charlesFile := "charlesFile.txt"
 	// dorisFile := "dorisFile.txt"
 	// eveFile := "eveFile.txt"
 	// frankFile := "frankFile.txt"
@@ -539,7 +539,6 @@ var _ = Describe("Client Tests", func() {
             Expect(err).ToNot(BeNil())
         })
 
-        /*
 		Specify("Basic Test: Testing Create/Accept Invite Functionality with multiple users and multiple instances.", func() {
 			userlib.DebugMsg("Initializing users Alice (aliceDesktop) and Bob.")
 			aliceDesktop, err = client.InitUser("alice", defaultPassword)
@@ -596,9 +595,7 @@ var _ = Describe("Client Tests", func() {
 			Expect(err).To(BeNil())
 			Expect(data).To(Equal([]byte(contentOne + contentTwo + contentThree)))
 		})
-        */
 
-        /*
 		Specify("Basic Test: Testing Revoke Functionality", func() {
 			userlib.DebugMsg("Initializing users Alice, Bob, and Charlie.")
 			alice, err = client.InitUser("alice", defaultPassword)
@@ -666,7 +663,6 @@ var _ = Describe("Client Tests", func() {
 			err = charles.AppendToFile(charlesFile, []byte(contentTwo))
 			Expect(err).ToNot(BeNil())
 		})
-        */
 
         Specify("Test Revoke wo an active attacker", func(){
             alice, err = client.InitUser("alice", defaultPassword)

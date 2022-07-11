@@ -1145,7 +1145,6 @@ func (user *User) CreateInvitation(filename string, recipientUsername string) (
     }else{
         // Non owner will directly use LockboxInfo to access the Lockbox
         lockboxInfo = &filemetadata.LockboxInfo
-        panic("TODO")
     }
 
     // Create the invitation record in the Datastore

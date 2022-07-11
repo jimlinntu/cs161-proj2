@@ -413,12 +413,19 @@ var _ = Describe("Client Tests", func() {
 
             err = user2.AcceptInvitation(defaultUsername, invPtr, filenameTwo)
             Expect(err).To(BeNil())
+
+            userlib.DebugMsg("Accept an invitation from a nonexistent user")
+            err = user2.AcceptInvitation(usernameThree, invPtr, filenameTwo)
+            userlib.DebugMsg(err.Error())
+            Expect(err).ToNot(BeNil())
         })
 
         Specify("Test Create and Accept Invitations and manipulate the files (wo an attacker)", func(){
             user, err := client.InitUser(defaultUsername, defaultPassword)
             Expect(err).To(BeNil())
             user2, err := client.InitUser(usernameTwo, defaultPassword)
+            Expect(err).To(BeNil())
+            user3, err := client.InitUser(usernameThree, defaultPassword)
             Expect(err).To(BeNil())
 
             err = user.StoreFile(filenameOne, []byte(contentOne))
@@ -476,9 +483,60 @@ var _ = Describe("Client Tests", func() {
             content, err = user.LoadFile(filenameOne)
             Expect(err).To(BeNil())
             Expect(content).To(Equal([]byte(contentTwo)))
+
+            userlib.DebugMsg("user2 share a file with user3")
+            invPtr, err = user2.CreateInvitation(filenameThree, usernameThree)
+            Expect(err).To(BeNil())
+            err = user3.AcceptInvitation(usernameTwo, invPtr, filenameOne)
+            Expect(err).To(BeNil())
+
+            userlib.DebugMsg("user3 changes the file. user1,2 should be able to see it")
+            err = user3.AppendToFile(filenameOne, []byte(contentThree))
+            Expect(err).To(BeNil())
+
+            content, err = user.LoadFile(filenameOne)
+            Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentTwo + contentThree)))
+
+            content, err = user2.LoadFile(filenameThree)
+            Expect(err).To(BeNil())
+            Expect(content).To(Equal([]byte(contentTwo + contentThree)))
         })
 
-        Specify("Test Create and Accept Invitations w an attacker tampering with", func(){
+        Specify("Test Create and Accept Invitations w an active attacker", func(){
+            user, err := client.InitUser(defaultUsername, defaultPassword)
+            Expect(err).To(BeNil())
+
+            user2, err := client.InitUser(usernameTwo, defaultPassword)
+            Expect(err).To(BeNil())
+
+            err = user.StoreFile(filenameOne, []byte(contentOne))
+            Expect(err).To(BeNil())
+
+            invPtr, err := user.CreateInvitation(filenameOne, usernameTwo)
+
+            userlib.DebugMsg("Tamper with the invitation record")
+            userlib.DatastoreSet(invPtr, userlib.RandomBytes(100))
+
+            err = user2.AcceptInvitation(defaultUsername, invPtr, filenameTwo)
+            userlib.DebugMsg(err.Error())
+            Expect(err).ToNot(BeNil())
+
+            userlib.DebugMsg("Tamper with the invitation record")
+            userlib.DatastoreSet(invPtr, userlib.RandomBytes(1000))
+
+            err = user2.AcceptInvitation(defaultUsername, invPtr, filenameTwo)
+            userlib.DebugMsg(err.Error())
+            Expect(err).ToNot(BeNil())
+
+            userlib.DebugMsg("Tamper with the filemetadata")
+            userlib.DatastoreSet(
+                client.GetFileMetadataUUID(defaultUsername, filenameOne),
+                userlib.RandomBytes(100))
+
+            _, err = user.CreateInvitation(filenameOne, usernameTwo)
+            userlib.DebugMsg(err.Error())
+            Expect(err).ToNot(BeNil())
         })
 
         /*
